@@ -1,35 +1,23 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import Icon from "@/components/ui/icon";
 
-const IMG1 = "https://cdn.poehali.dev/projects/4c6fc3ef-d36c-4f76-b8a0-b1b52638e7f1/files/fe7957ea-82dc-4685-93ba-bacf77e33033.jpg";
-const IMG2 = "https://cdn.poehali.dev/projects/4c6fc3ef-d36c-4f76-b8a0-b1b52638e7f1/files/fc8e1812-8d3e-4133-bc40-ce43ad7a3ca0.jpg";
-const IMG3 = "https://cdn.poehali.dev/projects/4c6fc3ef-d36c-4f76-b8a0-b1b52638e7f1/files/d7565c0f-d26e-41ca-9dff-82926cc2dc41.jpg";
+const VIDEOS_URL = "https://functions.poehali.dev/34934084-2009-48e9-aacd-52355573534a";
+const RATE_URL = "https://functions.poehali.dev/495ab997-792f-4a2a-92fd-5a0219e28dab";
 
 interface Video {
   id: number;
   title: string;
   channel: string;
-  views: string;
+  description: string;
   duration: string;
-  thumb: string;
+  views: number;
   likes: number;
   dislikes: number;
   category: string;
-  subscribed: boolean;
-  saved: boolean;
-  watched: boolean;
+  thumb_url: string;
+  video_url: string;
+  created_at: string;
 }
-
-const INITIAL_VIDEOS: Video[] = [
-  { id: 1, title: "Горы Алтая: Закат над Белухой", channel: "Дикая природа", views: "1.2 млн просмотров", duration: "18:24", thumb: IMG1, likes: 48200, dislikes: 312, category: "Природа", subscribed: true, saved: true, watched: true },
-  { id: 2, title: "Обзор iPhone 16 Pro — стоит ли брать?", channel: "TechReview RU", views: "870 тыс. просмотров", duration: "22:11", thumb: IMG2, likes: 31500, dislikes: 1820, category: "Технологии", subscribed: false, saved: false, watched: true },
-  { id: 3, title: "Идеальная паста карбонара", channel: "Кухня без границ", views: "2.4 млн просмотров", duration: "09:45", thumb: IMG3, likes: 92100, dislikes: 440, category: "Кулинария", subscribed: true, saved: true, watched: false },
-  { id: 4, title: "Вершины Кавказа: экспедиция 2024", channel: "Дикая природа", views: "445 тыс. просмотров", duration: "31:07", thumb: IMG1, likes: 18700, dislikes: 89, category: "Природа", subscribed: true, saved: false, watched: false },
-  { id: 5, title: "Samsung Galaxy S25 vs iPhone 16", channel: "TechReview RU", views: "3.1 млн просмотров", duration: "25:33", thumb: IMG2, likes: 65400, dislikes: 4210, category: "Технологии", subscribed: false, saved: false, watched: true },
-  { id: 6, title: "Тирамису за 15 минут", channel: "Кухня без границ", views: "980 тыс. просмотров", duration: "14:20", thumb: IMG3, likes: 44800, dislikes: 180, category: "Кулинария", subscribed: true, saved: true, watched: false },
-  { id: 7, title: "Байкал зимой: ледяное чудо", channel: "Россия с высоты", views: "5.2 млн просмотров", duration: "28:19", thumb: IMG1, likes: 210300, dislikes: 920, category: "Природа", subscribed: false, saved: false, watched: false },
-  { id: 8, title: "MacBook Air M3 — полный обзор", channel: "TechReview RU", views: "1.8 млн просмотров", duration: "19:55", thumb: IMG2, likes: 57900, dislikes: 730, category: "Технологии", subscribed: false, saved: false, watched: true },
-];
 
 type Section = "home" | "catalog" | "search" | "subscriptions" | "history" | "profile" | "favorites";
 
@@ -43,7 +31,7 @@ const NAV_ITEMS: { id: Section; label: string; icon: string }[] = [
   { id: "profile", label: "Профиль", icon: "User" },
 ];
 
-const CATEGORIES = ["Все", "Природа", "Технологии", "Кулинария"];
+const CATEGORIES = ["Все", "Природа", "Технологии", "Кулинария", "Спорт", "Музыка", "Образование", "Игры"];
 
 function formatCount(n: number) {
   if (n >= 1000000) return (n / 1000000).toFixed(1) + " млн";
@@ -51,39 +39,297 @@ function formatCount(n: number) {
   return String(n);
 }
 
+function formatViews(n: number) {
+  return formatCount(n) + " просмотров";
+}
+
+// ——— Upload Modal ———
+function UploadModal({ onClose, onUploaded }: { onClose: () => void; onUploaded: () => void }) {
+  const [title, setTitle] = useState("");
+  const [channel, setChannel] = useState("");
+  const [description, setDescription] = useState("");
+  const [category, setCategory] = useState("Без категории");
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const [thumbFile, setThumbFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [error, setError] = useState("");
+  const videoRef = useRef<HTMLInputElement>(null);
+  const thumbRef = useRef<HTMLInputElement>(null);
+
+  const toBase64 = (file: File): Promise<string> =>
+    new Promise((res, rej) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        res(result.split(",")[1]);
+      };
+      reader.onerror = rej;
+      reader.readAsDataURL(file);
+    });
+
+  const handleUpload = async () => {
+    if (!title.trim()) { setError("Введите название видео"); return; }
+    if (!videoFile) { setError("Выберите видеофайл"); return; }
+    setError("");
+    setUploading(true);
+
+    try {
+      setProgress("Подготовка файла...");
+      const videoB64 = await toBase64(videoFile);
+      const videoExt = videoFile.name.split(".").pop() || "mp4";
+
+      let thumbB64 = "";
+      let thumbExt = "jpg";
+      if (thumbFile) {
+        setProgress("Обработка обложки...");
+        thumbB64 = await toBase64(thumbFile);
+        thumbExt = thumbFile.name.split(".").pop() || "jpg";
+      }
+
+      setProgress("Загрузка на сервер...");
+      const resp = await fetch(VIDEOS_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: title.trim(),
+          channel: channel.trim() || "Аноним",
+          description: description.trim(),
+          category,
+          video_data: videoB64,
+          video_ext: videoExt,
+          thumb_data: thumbB64,
+          thumb_ext: thumbExt,
+        }),
+      });
+      const data = await resp.json();
+      if (data.success) {
+        onUploaded();
+        onClose();
+      } else {
+        setError("Ошибка загрузки. Попробуйте снова.");
+      }
+    } catch {
+      setError("Ошибка соединения. Попробуйте снова.");
+    } finally {
+      setUploading(false);
+      setProgress("");
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+      <div className="bg-card border border-border rounded-2xl w-full max-w-lg shadow-2xl animate-scale-in overflow-y-auto max-h-[90vh]">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border sticky top-0 bg-card z-10">
+          <h2 className="text-lg font-bold text-foreground">Загрузить видео</h2>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
+            <Icon name="X" size={20} />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-1.5">Видеофайл *</label>
+            <div
+              onClick={() => videoRef.current?.click()}
+              className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors ${
+                videoFile ? "border-primary/50 bg-primary/5" : "border-border hover:border-primary/40 hover:bg-white/3"
+              }`}
+            >
+              <input
+                ref={videoRef}
+                type="file"
+                accept="video/*"
+                className="hidden"
+                onChange={e => setVideoFile(e.target.files?.[0] || null)}
+              />
+              {videoFile ? (
+                <div className="flex items-center justify-center gap-2">
+                  <Icon name="FileVideo" size={20} className="text-primary" />
+                  <span className="text-sm text-foreground font-medium">{videoFile.name}</span>
+                </div>
+              ) : (
+                <div>
+                  <Icon name="Upload" size={28} className="text-muted-foreground mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground">Нажмите или перетащите видеофайл</p>
+                  <p className="text-xs text-muted-foreground/60 mt-1">MP4, MOV, AVI, WebM</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-1.5">Обложка (необязательно)</label>
+            <div
+              onClick={() => thumbRef.current?.click()}
+              className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition-colors ${
+                thumbFile ? "border-primary/50 bg-primary/5" : "border-border hover:border-primary/40"
+              }`}
+            >
+              <input
+                ref={thumbRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={e => setThumbFile(e.target.files?.[0] || null)}
+              />
+              {thumbFile ? (
+                <div className="flex items-center justify-center gap-2">
+                  <Icon name="Image" size={16} className="text-primary" />
+                  <span className="text-sm text-foreground">{thumbFile.name}</span>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Добавить обложку</p>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-1.5">Название *</label>
+            <input
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              placeholder="Введите название видео"
+              className="w-full bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/50 transition-colors"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-1.5">Имя / Канал</label>
+            <input
+              value={channel}
+              onChange={e => setChannel(e.target.value)}
+              placeholder="Ваш канал или имя"
+              className="w-full bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/50 transition-colors"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-1.5">Категория</label>
+            <select
+              value={category}
+              onChange={e => setCategory(e.target.value)}
+              className="w-full bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-primary/50 transition-colors"
+            >
+              {CATEGORIES.filter(c => c !== "Все").map(c => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+              <option value="Без категории">Без категории</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-1.5">Описание</label>
+            <textarea
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              placeholder="Расскажите о видео..."
+              rows={2}
+              className="w-full bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/50 transition-colors resize-none"
+            />
+          </div>
+
+          {error && (
+            <p className="text-sm text-red-400 flex items-center gap-1.5">
+              <Icon name="AlertCircle" size={14} />
+              {error}
+            </p>
+          )}
+
+          {progress && (
+            <div className="flex items-center gap-2 text-sm text-primary">
+              <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+              {progress}
+            </div>
+          )}
+        </div>
+
+        <div className="px-6 pb-5 flex gap-3">
+          <button
+            onClick={onClose}
+            disabled={uploading}
+            className="flex-1 py-2.5 rounded-xl border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors disabled:opacity-50"
+          >
+            Отмена
+          </button>
+          <button
+            onClick={handleUpload}
+            disabled={uploading || !videoFile}
+            className="flex-1 py-2.5 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {uploading ? (
+              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <Icon name="Upload" size={15} />
+            )}
+            {uploading ? "Загрузка..." : "Опубликовать"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ——— Video Card ———
 function VideoCard({
   video,
-  onRate,
   onSave,
+  saved,
   compact = false,
 }: {
   video: Video;
-  onRate: (id: number, type: "like" | "dislike") => void;
   onSave: (id: number) => void;
+  saved: boolean;
   compact?: boolean;
 }) {
   const [userVote, setUserVote] = useState<"like" | "dislike" | null>(null);
+  const [localLikes, setLocalLikes] = useState(video.likes);
+  const [localDislikes, setLocalDislikes] = useState(video.dislikes);
 
-  const handleVote = (type: "like" | "dislike") => {
-    setUserVote(prev => (prev === type ? null : type));
-    onRate(video.id, type);
+  const handleVote = async (type: "like" | "dislike") => {
+    if (userVote === type) return;
+    const prev = userVote;
+    setUserVote(type);
+    if (type === "like") setLocalLikes(l => l + 1);
+    else setLocalDislikes(d => d + 1);
+    if (prev === "like") setLocalLikes(l => l - 1);
+    if (prev === "dislike") setLocalDislikes(d => d - 1);
+    try {
+      await fetch(RATE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ video_id: video.id, type }),
+      });
+    } catch (_e) {
+      // игнорируем ошибки сети при оценке
+    }
   };
+
+  const thumbSrc = video.thumb_url || "";
 
   if (compact) {
     return (
       <div className="flex gap-3 p-3 rounded-xl hover:bg-white/5 transition-colors cursor-pointer group">
-        <div className="relative flex-shrink-0 w-40 h-24 rounded-lg overflow-hidden">
-          <img src={video.thumb} alt={video.title} className="w-full h-full object-cover" />
-          <span className="absolute bottom-1 right-1 bg-black/80 text-white text-[10px] px-1.5 py-0.5 rounded font-medium">
-            {video.duration}
-          </span>
+        <div className="relative flex-shrink-0 w-40 h-24 rounded-lg overflow-hidden bg-muted">
+          {thumbSrc ? (
+            <img src={thumbSrc} alt={video.title} className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center">
+              <Icon name="Play" size={24} className="text-muted-foreground" />
+            </div>
+          )}
+          {video.duration && (
+            <span className="absolute bottom-1 right-1 bg-black/80 text-white text-[10px] px-1.5 py-0.5 rounded font-medium">
+              {video.duration}
+            </span>
+          )}
         </div>
         <div className="flex-1 min-w-0">
           <h3 className="text-sm font-semibold text-foreground line-clamp-2 group-hover:text-primary transition-colors">
             {video.title}
           </h3>
           <p className="text-xs text-muted-foreground mt-1">{video.channel}</p>
-          <p className="text-xs text-muted-foreground">{video.views}</p>
+          <p className="text-xs text-muted-foreground">{formatViews(video.views)}</p>
           <div className="flex items-center gap-1.5 mt-2">
             <button
               onClick={e => { e.stopPropagation(); handleVote("like"); }}
@@ -92,7 +338,7 @@ function VideoCard({
               }`}
             >
               <Icon name="ThumbsUp" size={11} />
-              {formatCount(video.likes + (userVote === "like" ? 1 : 0))}
+              {formatCount(localLikes)}
             </button>
             <button
               onClick={e => { e.stopPropagation(); handleVote("dislike"); }}
@@ -101,7 +347,7 @@ function VideoCard({
               }`}
             >
               <Icon name="ThumbsDown" size={11} />
-              {formatCount(video.dislikes + (userVote === "dislike" ? 1 : 0))}
+              {formatCount(localDislikes)}
             </button>
           </div>
         </div>
@@ -112,17 +358,20 @@ function VideoCard({
   return (
     <div className="group cursor-pointer animate-fade-in">
       <div className="relative rounded-xl overflow-hidden mb-3 aspect-video bg-muted">
-        <img
-          src={video.thumb}
-          alt={video.title}
-          className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-        />
-        <span className="absolute bottom-2 right-2 bg-black/85 text-white text-xs px-2 py-0.5 rounded-md font-medium">
-          {video.duration}
-        </span>
-        {video.watched && (
-          <span className="absolute top-2 left-2 bg-black/70 text-[10px] text-muted-foreground px-1.5 py-0.5 rounded">
-            Просмотрено
+        {thumbSrc ? (
+          <img
+            src={thumbSrc}
+            alt={video.title}
+            className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-secondary to-muted">
+            <Icon name="Play" size={36} className="text-muted-foreground" />
+          </div>
+        )}
+        {video.duration && (
+          <span className="absolute bottom-2 right-2 bg-black/85 text-white text-xs px-2 py-0.5 rounded-md font-medium">
+            {video.duration}
           </span>
         )}
       </div>
@@ -135,7 +384,7 @@ function VideoCard({
             {video.title}
           </h3>
           <p className="text-xs text-muted-foreground mt-0.5">{video.channel}</p>
-          <p className="text-xs text-muted-foreground">{video.views}</p>
+          <p className="text-xs text-muted-foreground">{formatViews(video.views)}</p>
           <div className="flex items-center gap-1 mt-2">
             <button
               onClick={e => { e.stopPropagation(); handleVote("like"); }}
@@ -146,7 +395,7 @@ function VideoCard({
               }`}
             >
               <Icon name="ThumbsUp" size={12} />
-              {formatCount(video.likes + (userVote === "like" ? 1 : 0))}
+              {formatCount(localLikes)}
             </button>
             <button
               onClick={e => { e.stopPropagation(); handleVote("dislike"); }}
@@ -157,18 +406,18 @@ function VideoCard({
               }`}
             >
               <Icon name="ThumbsDown" size={12} />
-              {formatCount(video.dislikes + (userVote === "dislike" ? 1 : 0))}
+              {formatCount(localDislikes)}
             </button>
             <button
               onClick={e => { e.stopPropagation(); onSave(video.id); }}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all ml-auto ${
-                video.saved
+                saved
                   ? "bg-primary/20 text-primary"
                   : "bg-secondary text-muted-foreground hover:bg-white/10 hover:text-foreground"
               }`}
             >
               <Icon name="Bookmark" size={12} />
-              {video.saved ? "Сохранено" : "Сохранить"}
+              {saved ? "Сохранено" : "Сохранить"}
             </button>
           </div>
         </div>
@@ -181,18 +430,68 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h2 className="text-xl font-bold text-foreground mb-5">{children}</h2>;
 }
 
+function EmptyVideos({ onUpload }: { onUpload: () => void }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-20 text-center">
+      <div className="w-20 h-20 rounded-2xl bg-primary/10 flex items-center justify-center mb-5">
+        <Icon name="Video" size={36} className="text-primary" />
+      </div>
+      <h3 className="text-xl font-bold text-foreground mb-2">Видео пока нет</h3>
+      <p className="text-muted-foreground text-sm mb-6 max-w-xs">
+        Стань первым — загрузи своё видео и оно появится здесь
+      </p>
+      <button
+        onClick={onUpload}
+        className="flex items-center gap-2 bg-primary hover:bg-primary/90 text-white px-6 py-2.5 rounded-full font-semibold text-sm transition-colors"
+      >
+        <Icon name="Upload" size={15} />
+        Загрузить видео
+      </button>
+    </div>
+  );
+}
+
+function Loader() {
+  return (
+    <div className="flex items-center justify-center py-20">
+      <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+}
+
+// ——— Main App ———
 const Index = () => {
   const [section, setSection] = useState<Section>("home");
-  const [videos, setVideos] = useState<Video[]>(INITIAL_VIDEOS);
+  const [videos, setVideos] = useState<Video[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Video[]>([]);
   const [activeCategory, setActiveCategory] = useState("Все");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
+  const [savedIds, setSavedIds] = useState<Set<number>>(new Set());
 
-  const handleRate = (_id: number, _type: "like" | "dislike") => {};
+  const fetchVideos = async () => {
+    try {
+      setLoading(true);
+      const resp = await fetch(VIDEOS_URL);
+      const data = await resp.json();
+      setVideos(data.videos || []);
+    } catch {
+      setVideos([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchVideos(); }, []);
 
   const handleSave = (id: number) => {
-    setVideos(prev => prev.map(v => (v.id === id ? { ...v, saved: !v.saved } : v)));
+    setSavedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) { next.delete(id); } else { next.add(id); }
+      return next;
+    });
   };
 
   const handleSearch = (q: string) => {
@@ -208,19 +507,16 @@ const Index = () => {
 
   const filteredCatalog =
     activeCategory === "Все" ? videos : videos.filter(v => v.category === activeCategory);
-
-  const subscribedChannels = [...new Set(videos.filter(v => v.subscribed).map(v => v.channel))];
-  const subscribedVideos = videos.filter(v => v.subscribed);
-  const historyVideos = videos.filter(v => v.watched);
-  const savedVideos = videos.filter(v => v.saved);
+  const savedVideos = videos.filter(v => savedIds.has(v.id));
 
   return (
     <div className="min-h-screen bg-background flex">
+      {showUpload && (
+        <UploadModal onClose={() => setShowUpload(false)} onUploaded={fetchVideos} />
+      )}
+
       {sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/60 z-40 lg:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
+        <div className="fixed inset-0 bg-black/60 z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />
       )}
 
       {/* Sidebar */}
@@ -252,11 +548,6 @@ const Index = () => {
             >
               <Icon name={item.icon} size={18} />
               {item.label}
-              {item.id === "subscriptions" && subscribedVideos.length > 0 && (
-                <span className="ml-auto bg-primary text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">
-                  {subscribedVideos.length}
-                </span>
-              )}
               {item.id === "favorites" && savedVideos.length > 0 && (
                 <span className="ml-auto bg-primary/20 text-primary text-[10px] px-1.5 py-0.5 rounded-full font-bold">
                   {savedVideos.length}
@@ -266,13 +557,20 @@ const Index = () => {
           ))}
         </nav>
 
-        <div className="px-4 pb-5 border-t border-border pt-4">
+        <div className="px-3 pb-4 space-y-2">
           <button
-            onClick={() => setSection("profile")}
-            className="w-full flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-white/5 cursor-pointer transition-colors"
+            onClick={() => { setShowUpload(true); setSidebarOpen(false); }}
+            className="w-full flex items-center gap-2 justify-center py-2.5 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary/90 transition-colors"
           >
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary/40 to-primary/10 flex items-center justify-center">
-              <Icon name="User" size={15} className="text-primary" />
+            <Icon name="Upload" size={16} />
+            Загрузить видео
+          </button>
+          <button
+            onClick={() => { setSection("profile"); setSidebarOpen(false); }}
+            className="w-full flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-white/5 transition-colors border border-border"
+          >
+            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary/40 to-primary/10 flex items-center justify-center">
+              <Icon name="User" size={13} className="text-primary" />
             </div>
             <div className="text-left">
               <p className="text-sm font-medium text-foreground">Мой профиль</p>
@@ -307,8 +605,12 @@ const Index = () => {
             </div>
           </div>
 
-          <button className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors">
-            <Icon name="Bell" size={18} />
+          <button
+            onClick={() => setShowUpload(true)}
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-medium hover:bg-primary/90 transition-colors"
+          >
+            <Icon name="Upload" size={14} />
+            Загрузить
           </button>
         </header>
 
@@ -317,27 +619,25 @@ const Index = () => {
           {/* HOME */}
           {section === "home" && (
             <div className="animate-fade-in max-w-6xl mx-auto">
-              <div className="relative rounded-2xl overflow-hidden mb-8 aspect-[21/7] min-h-[140px]">
-                <img src={IMG1} alt="" className="w-full h-full object-cover" />
-                <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/40 to-transparent flex flex-col justify-center px-8">
-                  <span className="text-primary text-xs font-semibold uppercase tracking-widest mb-2">В тренде</span>
-                  <h1 className="text-2xl md:text-3xl font-bold text-white max-w-md leading-tight">
-                    Байкал зимой: ледяное чудо
-                  </h1>
-                  <p className="text-white/70 text-sm mt-1 mb-4">5.2 млн просмотров · Россия с высоты</p>
-                  <button className="flex items-center gap-2 bg-primary hover:bg-primary/90 text-white px-5 py-2 rounded-full font-semibold text-sm transition-colors w-fit">
-                    <Icon name="Play" size={14} />
-                    Смотреть
-                  </button>
+              <div className="flex items-center justify-between mb-5">
+                <SectionTitle>Все видео</SectionTitle>
+                <button
+                  onClick={fetchVideos}
+                  className="text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-lg hover:bg-white/5"
+                  title="Обновить"
+                >
+                  <Icon name="RefreshCw" size={16} />
+                </button>
+              </div>
+              {loading ? <Loader /> : videos.length === 0 ? (
+                <EmptyVideos onUpload={() => setShowUpload(true)} />
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+                  {videos.map(v => (
+                    <VideoCard key={v.id} video={v} onSave={handleSave} saved={savedIds.has(v.id)} />
+                  ))}
                 </div>
-              </div>
-
-              <SectionTitle>Рекомендации</SectionTitle>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-                {videos.map(v => (
-                  <VideoCard key={v.id} video={v} onRate={handleRate} onSave={handleSave} />
-                ))}
-              </div>
+              )}
             </div>
           )}
 
@@ -360,11 +660,21 @@ const Index = () => {
                   </button>
                 ))}
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-                {filteredCatalog.map(v => (
-                  <VideoCard key={v.id} video={v} onRate={handleRate} onSave={handleSave} />
-                ))}
-              </div>
+              {loading ? <Loader /> : filteredCatalog.length === 0 ? (
+                <div className="text-center py-16">
+                  <Icon name="FolderOpen" size={40} className="text-muted-foreground mx-auto mb-3" />
+                  <p className="text-foreground font-medium">В этой категории пока нет видео</p>
+                  <button onClick={() => setShowUpload(true)} className="mt-4 text-sm text-primary hover:underline">
+                    Загрузить первое
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+                  {filteredCatalog.map(v => (
+                    <VideoCard key={v.id} video={v} onSave={handleSave} saved={savedIds.has(v.id)} />
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -374,20 +684,15 @@ const Index = () => {
               <SectionTitle>Поиск</SectionTitle>
               {searchQuery.length < 2 ? (
                 <div>
-                  <p className="text-muted-foreground text-sm mb-6">Популярные категории</p>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                    {CATEGORIES.filter(c => c !== "Все").map((cat, i) => (
+                  <p className="text-muted-foreground text-sm mb-6">Введите запрос в поле выше</p>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {CATEGORIES.filter(c => c !== "Все").map(cat => (
                       <button
                         key={cat}
                         onClick={() => { setActiveCategory(cat); setSection("catalog"); }}
-                        className="relative rounded-xl overflow-hidden h-20 flex items-center justify-center"
+                        className="rounded-xl h-16 bg-secondary hover:bg-white/10 transition-colors flex items-center justify-center"
                       >
-                        <img
-                          src={[IMG1, IMG2, IMG3][i % 3]}
-                          alt=""
-                          className="absolute inset-0 w-full h-full object-cover opacity-30"
-                        />
-                        <span className="relative font-bold text-foreground text-sm drop-shadow">{cat}</span>
+                        <span className="font-medium text-foreground text-sm">{cat}</span>
                       </button>
                     ))}
                   </div>
@@ -405,7 +710,7 @@ const Index = () => {
                   </p>
                   <div className="space-y-1">
                     {searchResults.map(v => (
-                      <VideoCard key={v.id} video={v} onRate={handleRate} onSave={handleSave} compact />
+                      <VideoCard key={v.id} video={v} onSave={handleSave} saved={savedIds.has(v.id)} compact />
                     ))}
                   </div>
                 </div>
@@ -417,58 +722,23 @@ const Index = () => {
           {section === "subscriptions" && (
             <div className="animate-fade-in max-w-6xl mx-auto">
               <SectionTitle>Подписки</SectionTitle>
-              {subscribedChannels.length === 0 ? (
-                <div className="text-center py-16">
-                  <Icon name="Bell" size={40} className="text-muted-foreground mx-auto mb-3" />
-                  <p className="text-foreground font-medium">Нет подписок</p>
-                </div>
-              ) : (
-                <>
-                  <div className="flex gap-3 mb-6 flex-wrap">
-                    {subscribedChannels.map(ch => (
-                      <div key={ch} className="flex items-center gap-2 bg-secondary rounded-full px-3 py-1.5">
-                        <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center">
-                          <Icon name="User" size={12} className="text-primary" />
-                        </div>
-                        <span className="text-sm text-foreground font-medium">{ch}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-                    {subscribedVideos.map(v => (
-                      <VideoCard key={v.id} video={v} onRate={handleRate} onSave={handleSave} />
-                    ))}
-                  </div>
-                </>
-              )}
+              <div className="text-center py-16">
+                <Icon name="Bell" size={40} className="text-muted-foreground mx-auto mb-3" />
+                <p className="text-foreground font-medium">Скоро появятся подписки</p>
+                <p className="text-muted-foreground text-sm mt-1">Эта функция в разработке</p>
+              </div>
             </div>
           )}
 
           {/* HISTORY */}
           {section === "history" && (
             <div className="animate-fade-in max-w-4xl mx-auto">
-              <div className="flex items-center justify-between mb-5">
-                <SectionTitle>История просмотров</SectionTitle>
-                {historyVideos.length > 0 && (
-                  <button className="text-sm text-muted-foreground hover:text-primary transition-colors flex items-center gap-1.5">
-                    <Icon name="Trash2" size={14} />
-                    Очистить
-                  </button>
-                )}
+              <SectionTitle>История просмотров</SectionTitle>
+              <div className="text-center py-16">
+                <Icon name="History" size={40} className="text-muted-foreground mx-auto mb-3" />
+                <p className="text-foreground font-medium">История пуста</p>
+                <p className="text-muted-foreground text-sm mt-1">Просмотренные видео будут здесь</p>
               </div>
-              {historyVideos.length === 0 ? (
-                <div className="text-center py-16">
-                  <Icon name="History" size={40} className="text-muted-foreground mx-auto mb-3" />
-                  <p className="text-foreground font-medium">История пуста</p>
-                  <p className="text-muted-foreground text-sm mt-1">Просмотренные видео будут здесь</p>
-                </div>
-              ) : (
-                <div className="space-y-1">
-                  {historyVideos.map(v => (
-                    <VideoCard key={v.id} video={v} onRate={handleRate} onSave={handleSave} compact />
-                  ))}
-                </div>
-              )}
             </div>
           )}
 
@@ -485,7 +755,7 @@ const Index = () => {
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
                   {savedVideos.map(v => (
-                    <VideoCard key={v.id} video={v} onRate={handleRate} onSave={handleSave} />
+                    <VideoCard key={v.id} video={v} onSave={handleSave} saved={savedIds.has(v.id)} />
                   ))}
                 </div>
               )}
@@ -506,40 +776,25 @@ const Index = () => {
                     <p className="text-muted-foreground text-sm">@viewer · Участник с 2024</p>
                     <div className="flex gap-4 mt-2 text-sm">
                       <span className="text-foreground font-semibold">
-                        {subscribedChannels.length}{" "}
-                        <span className="text-muted-foreground font-normal">подписок</span>
-                      </span>
-                      <span className="text-foreground font-semibold">
                         {savedVideos.length}{" "}
                         <span className="text-muted-foreground font-normal">сохранено</span>
                       </span>
                       <span className="text-foreground font-semibold">
-                        {historyVideos.length}{" "}
-                        <span className="text-muted-foreground font-normal">просмотрено</span>
+                        {videos.length}{" "}
+                        <span className="text-muted-foreground font-normal">видео на платформе</span>
                       </span>
                     </div>
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 mb-4">
-                {[
-                  { label: "Лайков поставлено", value: "12", icon: "ThumbsUp" },
-                  { label: "Дизлайков", value: "3", icon: "ThumbsDown" },
-                  { label: "Подписок", value: String(subscribedChannels.length), icon: "Bell" },
-                  { label: "В избранном", value: String(savedVideos.length), icon: "Bookmark" },
-                ].map(stat => (
-                  <div key={stat.label} className="bg-card border border-border rounded-xl p-4 flex items-center gap-3">
-                    <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
-                      <Icon name={stat.icon} size={18} className="text-primary" />
-                    </div>
-                    <div>
-                      <p className="text-xl font-bold text-foreground">{stat.value}</p>
-                      <p className="text-xs text-muted-foreground">{stat.label}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <button
+                onClick={() => setShowUpload(true)}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-primary text-white font-semibold hover:bg-primary/90 transition-colors mb-4"
+              >
+                <Icon name="Upload" size={18} />
+                Загрузить новое видео
+              </button>
 
               <div className="bg-card border border-border rounded-xl overflow-hidden">
                 {[
@@ -562,6 +817,7 @@ const Index = () => {
               </div>
             </div>
           )}
+
         </main>
       </div>
     </div>
