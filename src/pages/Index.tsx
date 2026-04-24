@@ -1,8 +1,31 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Icon from "@/components/ui/icon";
 
 const VIDEOS_URL = "https://functions.poehali.dev/34934084-2009-48e9-aacd-52355573534a";
 const RATE_URL = "https://functions.poehali.dev/495ab997-792f-4a2a-92fd-5a0219e28dab";
+const AUTH_URL = "https://functions.poehali.dev/88ecd379-9824-42c0-b348-37881077a5bc";
+
+// Расширяем глобальный тип window для Google GSI
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize: (cfg: object) => void;
+          prompt: () => void;
+          renderButton: (el: HTMLElement, cfg: object) => void;
+        };
+      };
+    };
+  }
+}
+
+interface GoogleUser {
+  id: number;
+  name: string;
+  email: string;
+  avatar_url: string;
+}
 
 interface Video {
   id: number;
@@ -459,6 +482,77 @@ function Loader() {
   );
 }
 
+// ——— Google Login Modal ———
+function LoginModal({ onClose, onLogin }: { onClose: () => void; onLogin: (user: GoogleUser) => void }) {
+  const btnRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const clientId = (window as { GOOGLE_CLIENT_ID?: string }).GOOGLE_CLIENT_ID || "";
+    const tryInit = () => {
+      if (!window.google) { setTimeout(tryInit, 300); return; }
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: async (resp: { credential: string }) => {
+          try {
+            const r = await fetch(AUTH_URL, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id_token: resp.credential }),
+            });
+            const data = await r.json();
+            if (data.success) {
+              localStorage.setItem("yuvest_user", JSON.stringify(data.user));
+              onLogin(data.user);
+              onClose();
+            }
+          } catch (_e) { /* ошибка авторизации */ }
+        },
+      });
+      if (btnRef.current) {
+        window.google.accounts.id.renderButton(btnRef.current, {
+          theme: "filled_black",
+          size: "large",
+          text: "signin_with",
+          shape: "pill",
+          width: 280,
+          locale: "ru",
+        });
+      }
+    };
+    tryInit();
+  }, [onClose, onLogin]);
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+      <div className="bg-card border border-border rounded-2xl w-full max-w-sm shadow-2xl animate-scale-in">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 bg-primary rounded-md flex items-center justify-center">
+              <Icon name="Play" size={12} className="text-white ml-0.5" />
+            </div>
+            <span className="font-bold text-foreground">Ювист</span>
+          </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
+            <Icon name="X" size={18} />
+          </button>
+        </div>
+        <div className="p-8 text-center">
+          <h2 className="text-xl font-bold text-foreground mb-2">Войти в аккаунт</h2>
+          <p className="text-muted-foreground text-sm mb-8">
+            Войди через Google чтобы загружать видео и сохранять избранное
+          </p>
+          <div className="flex justify-center">
+            <div ref={btnRef} />
+          </div>
+          <p className="text-xs text-muted-foreground mt-6">
+            Нажимая «Войти», вы соглашаетесь с условиями использования
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ——— Main App ———
 const Index = () => {
   const [section, setSection] = useState<Section>("home");
@@ -469,7 +563,26 @@ const Index = () => {
   const [activeCategory, setActiveCategory] = useState("Все");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
   const [savedIds, setSavedIds] = useState<Set<number>>(new Set());
+  const [user, setUser] = useState<GoogleUser | null>(() => {
+    try {
+      const saved = localStorage.getItem("yuvest_user");
+      return saved ? JSON.parse(saved) : null;
+    } catch { return null; }
+  });
+
+  const handleLogin = useCallback((u: GoogleUser) => { setUser(u); }, []);
+  const handleLogout = () => {
+    setUser(null);
+    localStorage.removeItem("yuvest_user");
+    setSection("home");
+  };
+
+  const requireAuth = (action: () => void) => {
+    if (!user) { setShowLogin(true); return; }
+    action();
+  };
 
   const fetchVideos = async () => {
     try {
@@ -514,6 +627,9 @@ const Index = () => {
       {showUpload && (
         <UploadModal onClose={() => setShowUpload(false)} onUploaded={fetchVideos} />
       )}
+      {showLogin && (
+        <LoginModal onClose={() => setShowLogin(false)} onLogin={handleLogin} />
+      )}
 
       {sidebarOpen && (
         <div className="fixed inset-0 bg-black/60 z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />
@@ -532,7 +648,7 @@ const Index = () => {
           <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
             <Icon name="Play" size={16} className="text-white ml-0.5" />
           </div>
-          <span className="text-lg font-bold text-foreground tracking-tight">ViewStream</span>
+          <span className="text-lg font-bold text-foreground tracking-tight">Ювист</span>
         </div>
 
         <nav className="flex-1 py-4 px-3 space-y-0.5">
@@ -559,24 +675,38 @@ const Index = () => {
 
         <div className="px-3 pb-4 space-y-2">
           <button
-            onClick={() => { setShowUpload(true); setSidebarOpen(false); }}
+            onClick={() => { requireAuth(() => { setShowUpload(true); setSidebarOpen(false); }); }}
             className="w-full flex items-center gap-2 justify-center py-2.5 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary/90 transition-colors"
           >
             <Icon name="Upload" size={16} />
             Загрузить видео
           </button>
-          <button
-            onClick={() => { setSection("profile"); setSidebarOpen(false); }}
-            className="w-full flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-white/5 transition-colors border border-border"
-          >
-            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary/40 to-primary/10 flex items-center justify-center">
-              <Icon name="User" size={13} className="text-primary" />
-            </div>
-            <div className="text-left">
-              <p className="text-sm font-medium text-foreground">Мой профиль</p>
-              <p className="text-[10px] text-muted-foreground">@viewer</p>
-            </div>
-          </button>
+          {user ? (
+            <button
+              onClick={() => { setSection("profile"); setSidebarOpen(false); }}
+              className="w-full flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-white/5 transition-colors border border-border"
+            >
+              {user.avatar_url ? (
+                <img src={user.avatar_url} alt={user.name} className="w-7 h-7 rounded-full object-cover" />
+              ) : (
+                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary/40 to-primary/10 flex items-center justify-center">
+                  <Icon name="User" size={13} className="text-primary" />
+                </div>
+              )}
+              <div className="text-left min-w-0">
+                <p className="text-sm font-medium text-foreground truncate">{user.name}</p>
+                <p className="text-[10px] text-muted-foreground truncate">{user.email}</p>
+              </div>
+            </button>
+          ) : (
+            <button
+              onClick={() => { setShowLogin(true); setSidebarOpen(false); }}
+              className="w-full flex items-center gap-2 justify-center py-2.5 rounded-xl border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
+            >
+              <Icon name="LogIn" size={15} />
+              Войти
+            </button>
+          )}
         </div>
       </aside>
 
@@ -606,12 +736,21 @@ const Index = () => {
           </div>
 
           <button
-            onClick={() => setShowUpload(true)}
+            onClick={() => requireAuth(() => setShowUpload(true))}
             className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-medium hover:bg-primary/90 transition-colors"
           >
             <Icon name="Upload" size={14} />
             Загрузить
           </button>
+          {!user && (
+            <button
+              onClick={() => setShowLogin(true)}
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-white/5 text-sm font-medium transition-colors"
+            >
+              <Icon name="LogIn" size={14} />
+              Войти
+            </button>
+          )}
         </header>
 
         <main className="flex-1 p-6 overflow-auto">
@@ -766,55 +905,88 @@ const Index = () => {
           {section === "profile" && (
             <div className="animate-fade-in max-w-2xl mx-auto">
               <SectionTitle>Профиль</SectionTitle>
-              <div className="bg-card rounded-2xl p-6 border border-border mb-4">
-                <div className="flex items-center gap-5">
-                  <div className="w-20 h-20 rounded-full bg-gradient-to-br from-primary/30 to-primary/10 flex items-center justify-center border-2 border-primary/30">
-                    <Icon name="User" size={32} className="text-primary" />
+              {!user ? (
+                <div className="text-center py-16">
+                  <div className="w-20 h-20 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-5">
+                    <Icon name="User" size={36} className="text-primary" />
                   </div>
-                  <div>
-                    <h2 className="text-xl font-bold text-foreground">Мой канал</h2>
-                    <p className="text-muted-foreground text-sm">@viewer · Участник с 2024</p>
-                    <div className="flex gap-4 mt-2 text-sm">
-                      <span className="text-foreground font-semibold">
-                        {savedVideos.length}{" "}
-                        <span className="text-muted-foreground font-normal">сохранено</span>
-                      </span>
-                      <span className="text-foreground font-semibold">
-                        {videos.length}{" "}
-                        <span className="text-muted-foreground font-normal">видео на платформе</span>
-                      </span>
+                  <h3 className="text-xl font-bold text-foreground mb-2">Вы не вошли</h3>
+                  <p className="text-muted-foreground text-sm mb-6 max-w-xs mx-auto">
+                    Войдите через Google чтобы загружать видео и управлять профилем
+                  </p>
+                  <button
+                    onClick={() => setShowLogin(true)}
+                    className="flex items-center gap-2 bg-primary hover:bg-primary/90 text-white px-6 py-2.5 rounded-full font-semibold text-sm transition-colors mx-auto"
+                  >
+                    <Icon name="LogIn" size={15} />
+                    Войти через Google
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="bg-card rounded-2xl p-6 border border-border mb-4">
+                    <div className="flex items-center gap-5">
+                      {user.avatar_url ? (
+                        <img src={user.avatar_url} alt={user.name} className="w-20 h-20 rounded-full object-cover border-2 border-primary/30" />
+                      ) : (
+                        <div className="w-20 h-20 rounded-full bg-gradient-to-br from-primary/30 to-primary/10 flex items-center justify-center border-2 border-primary/30">
+                          <Icon name="User" size={32} className="text-primary" />
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <h2 className="text-xl font-bold text-foreground">{user.name}</h2>
+                        <p className="text-muted-foreground text-sm">{user.email}</p>
+                        <div className="flex gap-4 mt-2 text-sm">
+                          <span className="text-foreground font-semibold">
+                            {savedVideos.length}{" "}
+                            <span className="text-muted-foreground font-normal">сохранено</span>
+                          </span>
+                          <span className="text-foreground font-semibold">
+                            {videos.length}{" "}
+                            <span className="text-muted-foreground font-normal">видео на платформе</span>
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </div>
 
-              <button
-                onClick={() => setShowUpload(true)}
-                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-primary text-white font-semibold hover:bg-primary/90 transition-colors mb-4"
-              >
-                <Icon name="Upload" size={18} />
-                Загрузить новое видео
-              </button>
-
-              <div className="bg-card border border-border rounded-xl overflow-hidden">
-                {[
-                  { label: "Настройки аккаунта", icon: "Settings" },
-                  { label: "Уведомления", icon: "Bell" },
-                  { label: "Конфиденциальность", icon: "Lock" },
-                  { label: "Помощь", icon: "HelpCircle" },
-                ].map((item, i, arr) => (
                   <button
-                    key={item.label}
-                    className={`w-full flex items-center gap-3 px-4 py-3.5 hover:bg-white/5 transition-colors text-sm text-foreground ${
-                      i < arr.length - 1 ? "border-b border-border" : ""
-                    }`}
+                    onClick={() => setShowUpload(true)}
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-primary text-white font-semibold hover:bg-primary/90 transition-colors mb-4"
                   >
-                    <Icon name={item.icon} size={16} className="text-muted-foreground" />
-                    {item.label}
-                    <Icon name="ChevronRight" size={14} className="text-muted-foreground ml-auto" />
+                    <Icon name="Upload" size={18} />
+                    Загрузить новое видео
                   </button>
-                ))}
-              </div>
+
+                  <div className="bg-card border border-border rounded-xl overflow-hidden mb-3">
+                    {[
+                      { label: "Настройки аккаунта", icon: "Settings" },
+                      { label: "Уведомления", icon: "Bell" },
+                      { label: "Конфиденциальность", icon: "Lock" },
+                      { label: "Помощь", icon: "HelpCircle" },
+                    ].map((item, i, arr) => (
+                      <button
+                        key={item.label}
+                        className={`w-full flex items-center gap-3 px-4 py-3.5 hover:bg-white/5 transition-colors text-sm text-foreground ${
+                          i < arr.length - 1 ? "border-b border-border" : ""
+                        }`}
+                      >
+                        <Icon name={item.icon} size={16} className="text-muted-foreground" />
+                        {item.label}
+                        <Icon name="ChevronRight" size={14} className="text-muted-foreground ml-auto" />
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    onClick={handleLogout}
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-border text-sm font-medium text-muted-foreground hover:text-red-400 hover:border-red-400/40 hover:bg-red-400/5 transition-all"
+                  >
+                    <Icon name="LogOut" size={16} />
+                    Выйти из аккаунта
+                  </button>
+                </>
+              )}
             </div>
           )}
 
